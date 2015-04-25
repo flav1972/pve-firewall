@@ -88,6 +88,12 @@ my $option_properties = {
 	optional => 1,
 	enum => ['ACCEPT', 'REJECT', 'DROP'],
     },
+    policy_forward => {
+	description => "Forward policy.",
+	type => 'string',
+	optional => 1,
+	enum => ['ACCEPT', 'REJECT', 'DROP'],
+    },
 };
 
 my $add_option_properties = sub {

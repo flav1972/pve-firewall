@@ -1120,7 +1120,7 @@ my $rule_properties = {
     type => {
 	type => 'string',
 	optional => 1,
-	enum => ['in', 'out', 'group'],
+	enum => ['in', 'out', 'forward', 'group'],
     },
     action => {
 	description => "Rule action ('ACCEPT', 'DROP', 'REJECT') or security group name.",
@@ -1316,7 +1316,7 @@ sub verify_rule {
     &$add_error('action', "missing property") if !$action;
 
     if ($type) {
-	if ($type eq  'in' || $type eq 'out') {
+	if ($type eq  'in' || $type eq 'out' || $type eq 'forward') {
 	    &$add_error('action', "unknown action '$action'")
 		if $action && ($action !~ m/^(ACCEPT|DROP|REJECT)$/);
 	} elsif ($type eq 'group') {
@@ -2174,6 +2174,66 @@ sub enable_host_firewall {
     my $policy = $cluster_options->{policy_in} || 'DROP'; # allow nothing by default
     ruleset_add_chain_policy($ruleset, $chain, $ipversion, 0, $policy, $loglevel, $accept_action);
 
+    # host forward firewall
+    $chain = "PVEFW-HOST-FORWARD";
+    ruleset_create_chain($ruleset, $chain);
+
+    $loglevel = get_option_log_level($options, "log_level_forward");
+
+    ruleset_addrule($ruleset, $chain, "-i lo -j ACCEPT");
+
+    ruleset_chain_add_conn_filters($ruleset, $chain, 'ACCEPT');
+    ruleset_chain_add_input_filters($ruleset, $chain, $ipversion, $options, $cluster_conf, $loglevel);
+
+    # we use RETURN because we may want to check other thigs later
+    $accept_action = 'RETURN';
+
+    ruleset_addrule($ruleset, $chain, "-p igmp -j $accept_action"); # important for multicast
+
+    # add host rules first, so that cluster wide rules can be overwritten
+    foreach my $rule (@$rules, @$cluster_rules) {
+	next if !$rule->{enable} || $rule->{errors};
+	next if $rule->{ipversion} && ($rule->{ipversion} != $ipversion);
+
+	# on forward chain we do not take care of interface
+	#$rule->{iface_out} = $rule->{iface} if $rule->{iface};
+	eval {
+	    if ($rule->{type} eq 'group') {
+		ruleset_add_group_rule($ruleset, $cluster_conf, $chain, $rule, 'FORWARD', $accept_action, $ipversion);
+	    } elsif ($rule->{type} eq 'forward') {
+		ruleset_generate_rule($ruleset, $chain, $ipversion, 
+				      $rule,
+                                      { ACCEPT => $accept_action, REJECT => "PVEFW-reject" },
+				      undef, $cluster_conf, $hostfw_conf);
+	    }
+	};
+	warn $@ if $@;
+	#delete $rule->{iface_out};
+    }
+
+    # allow standard traffic for management ipset (includes cluster network)
+    ruleset_addrule($ruleset, $chain, "$mngmntsrc -p tcp --dport 8006 -j $accept_action");  # PVE API
+    ruleset_addrule($ruleset, $chain, "$mngmntsrc -p tcp --dport 5900:5999 -j $accept_action");  # PVE VNC Console
+    ruleset_addrule($ruleset, $chain, "$mngmntsrc -p tcp --dport 3128 -j $accept_action");  # SPICE Proxy
+    ruleset_addrule($ruleset, $chain, "$mngmntsrc -p tcp --dport 22 -j $accept_action");  # SSH
+
+    # allow standard traffic on cluster network
+    if ($localnet && ($ipversion == $localnet_ver)) {
+	# Flav: TODO verify this 4 rules
+	ruleset_addrule($ruleset, $chain, "-d $localnet -p tcp --dport 8006 -j $accept_action");  # PVE API
+	ruleset_addrule($ruleset, $chain, "-d $localnet -p tcp --dport 22 -j $accept_action");  # SSH
+	ruleset_addrule($ruleset, $chain, "-d $localnet -p tcp --dport 5900:5999 -j $accept_action");  # PVE VNC Console
+	ruleset_addrule($ruleset, $chain, "-d $localnet -p tcp --dport 3128 -j $accept_action");  # SPICE Proxy
+
+	my $corosync_rule = "-p udp --dport 5404:5405 -j $accept_action";
+	ruleset_addrule($ruleset, $chain, "-s $localnet -d $localnet $corosync_rule");
+	ruleset_addrule($ruleset, $chain, "-s $localnet -m addrtype --dst-type MULTICAST $corosync_rule");
+    }
+
+    # implement forward policy
+    $policy = $cluster_options->{policy_forward} || 'ACCEPT'; # allow nothing by default
+    ruleset_add_chain_policy($ruleset, $chain, $ipversion, 0, $policy, $loglevel, $accept_action);
+
     # host outbound firewall
     $chain = "PVEFW-HOST-OUT";
     ruleset_create_chain($ruleset, $chain);
@@ -2226,6 +2286,7 @@ sub enable_host_firewall {
 
     ruleset_addrule($ruleset, "PVEFW-OUTPUT", "-j PVEFW-HOST-OUT");
     ruleset_addrule($ruleset, "PVEFW-INPUT", "-j PVEFW-HOST-IN");
+    ruleset_addrule($ruleset, "PVEFW-FORWARD", "-j PVEFW-HOST-FORWARD");
 }
 
 sub generate_group_rules {
@@ -2265,6 +2326,21 @@ sub generate_group_rules {
 			      { ACCEPT => 'PVEFW-SET-ACCEPT-MARK', REJECT => "PVEFW-reject" }, 
 			      undef, $cluster_conf);
     }
+
+    $chain = "GROUP-${group}-FORWARD";
+
+    ruleset_create_chain($ruleset, $chain);
+    ruleset_addrule($ruleset, $chain, "-j MARK --set-mark 0"); # clear mark
+
+    foreach my $rule (@$rules) {
+	next if $rule->{type} ne 'forward';
+	next if $rule->{ipversion} && $rule->{ipversion} ne $ipversion;
+	# we use PVEFW-SET-ACCEPT-MARK (Instead of ACCEPT) because we need to
+	# check also other tap rules later
+	ruleset_generate_rule($ruleset, $chain, $ipversion, $rule,
+			      { ACCEPT => 'PVEFW-SET-ACCEPT-MARK', REJECT => "PVEFW-reject" }, 
+			      undef, $cluster_conf);
+    }
 }
 
 my $MAX_NETS = 32;
@@ -2295,7 +2371,7 @@ sub parse_fw_rule {
     $rule->{type} = lc($1);
     $rule->{action} = $2;
 
-    if ($rule->{type} eq  'in' || $rule->{type} eq 'out') {
+    if ($rule->{type} eq  'in' || $rule->{type} eq 'out' || $rule->{type} eq 'forward') {
 	if ($rule->{action} =~ m/^(\S+)\((ACCEPT|DROP|REJECT)\)$/) {
 	    $rule->{macro} = $1;
 	    $rule->{action} = $2;
@@ -2362,7 +2438,7 @@ sub parse_vmfw_option {
     } elsif ($line =~ m/^(log_level_in|log_level_out):\s*(($loglevels)\s*)?$/i) {
 	$opt = lc($1);
 	$value = $2 ? lc($3) : '';
-    } elsif ($line =~ m/^(policy_(in|out)):\s*(ACCEPT|DROP|REJECT)\s*$/i) {
+    } elsif ($line =~ m/^(policy_(in|out|forward)):\s*(ACCEPT|DROP|REJECT)\s*$/i) {
 	$opt = lc($1);
 	$value = uc($3);
     } elsif ($line =~ m/^(ips_queues):\s*((\d+)(:(\d+))?)\s*$/i) {
@@ -2385,7 +2461,7 @@ sub parse_hostfw_option {
     if ($line =~ m/^(enable|nosmurfs|tcpflags):\s*(0|1)\s*$/i) {
 	$opt = lc($1);
 	$value = int($2);
-    } elsif ($line =~ m/^(log_level_in|log_level_out|tcp_flags_log_level|smurf_log_level):\s*(($loglevels)\s*)?$/i) {
+    } elsif ($line =~ m/^(log_level_in|log_level_out|log_level_forward|tcp_flags_log_level|smurf_log_level):\s*(($loglevels)\s*)?$/i) {
 	$opt = lc($1);
 	$value = $2 ? lc($3) : '';
     } elsif ($line =~ m/^(nf_conntrack_max|nf_conntrack_tcp_timeout_established):\s*(\d+)\s*$/i) {
@@ -2406,7 +2482,7 @@ sub parse_clusterfw_option {
     if ($line =~ m/^(enable):\s*(0|1)\s*$/i) {
 	$opt = lc($1);
 	$value = int($2);
-    } elsif ($line =~ m/^(policy_(in|out)):\s*(ACCEPT|DROP|REJECT)\s*$/i) {
+    } elsif ($line =~ m/^(policy_(in|out|forward)):\s*(ACCEPT|DROP|REJECT)\s*$/i) {
 	$opt = lc($1);
 	$value = uc($3);
     } else {
@@ -2740,7 +2816,9 @@ my $format_rules = sub {
     my $raw = '';
 
     foreach my $rule (@$rules) {
-	if ($rule->{type} eq  'in' || $rule->{type} eq 'out' || $rule->{type} eq 'group') {
+	if ($rule->{type} eq  'in' || $rule->{type} eq 'out' 
+                                   || $rule->{type} eq 'forward' 
+                                   || $rule->{type} eq 'group') {
 	    $raw .= '|' if defined($rule->{enable}) && !$rule->{enable};
 	    $raw .= uc($rule->{type});
 	    if ($rule->{macro}) {
