@@ -599,7 +599,8 @@ $pve_std_chains->{6} = {
 	# ipv6 addrtype does not work with kernel 2.6.32
 	#{ action => 'DROP', dsttype => 'MULTICAST' },
         #{ action => 'DROP', dsttype => 'ANYCAST' },
-        { action => 'DROP', dest => 'ff00::/8' },
+        # Flav: This should not be dropped like this because it will drop all ICMP request for local discovery
+        #{ action => 'DROP', dest => 'ff00::/8' },
         #{ action => 'DROP', dest => '224.0.0.0/4' },
     ],
     'PVEFW-reject' => [
@@ -619,10 +620,48 @@ $pve_std_chains->{6} = {
 	{ action => 'PVEFW-reject', proto => 'tcp', dport => '43' }, # REJECT 'auth'
         # we are not interested in BROADCAST/MULTICAST/ANYCAST
         { action => 'PVEFW-DropBroadcast' },
+        # Flav: adds in order to make IPv6 working
+        # For IPv6 some ICMP traffic are mandatory
         # ACCEPT critical ICMP types
-        { action => 'ACCEPT', proto => 'icmpv6', dport => 'destination-unreachable' },
-        { action => 'ACCEPT', proto => 'icmpv6', dport => 'time-exceeded' },
-        { action => 'ACCEPT', proto => 'icmpv6', dport => 'packet-too-big' },
+        { action => 'ACCEPT', proto => 'icmpv6', dport => 'destination-unreachable' }, # 1
+        { action => 'ACCEPT', proto => 'icmpv6', dport => 'packet-too-big' }, # 2
+        { action => 'ACCEPT', proto => 'icmpv6', dport => 'time-exceeded' }, # 3
+        { action => 'ACCEPT', proto => 'icmpv6', dport => 'parameter-problem' }, # 4
+
+        # These next are needed in order to configure neighbourghood and routing
+        # Allow others ICMPv6 types but only if the hop limit field is 255.
+        "-p icmpv6 --icmpv6-type router-solicitation -m hl --hl-eq 255 -j ACCEPT", # 133
+        "-p icmpv6 --icmpv6-type router-advertisement -m hl --hl-eq 255 -j ACCEPT", # 134
+        "-p icmpv6 --icmpv6-type neighbor-solicitation -m hl --hl-eq 255 -j ACCEPT", # 135
+        "-p icmpv6 --icmpv6-type neighbor-advertisement -m hl --hl-eq 255 -j ACCEPT", # 136
+        "-p icmpv6 --icmpv6-type redirect -m hl --hl-eq 255 -j ACCEPT", # 137
+        # inverse neighbour discovery solicitation
+        "-p icmpv6 --icmpv6-type 141 -m hl --hl-eq 255 -j ACCEPT",
+        # inverse neighbour discovery advertisement
+        "-p icmpv6 --icmpv6-type 142 -m hl --hl-eq 255 -j ACCEPT",
+
+        # For certificate usage
+        # Certificate path solicitation
+        "-p icmpv6 --icmpv6-type 148 -m hl --hl-eq 255 -j ACCEPT",
+        # Certificate path advertisement
+        "-p icmpv6 --icmpv6-type 149 -m hl --hl-eq 255 -j ACCEPT",
+        
+        # Multicast on Local Link
+        # Listener Query / Report / Done
+        { action => 'ACCEPT', proto => 'icmpv6', source => 'fe80::/10', dport => 130 },
+        { action => 'ACCEPT', proto => 'icmpv6', source => 'fe80::/10', dport => 131 },
+        { action => 'ACCEPT', proto => 'icmpv6', source => 'fe80::/10', dport => 132 },
+        # Listener report v2
+        { action => 'ACCEPT', proto => 'icmpv6', source => 'fe80::/10', dport => 143 },
+
+        # Multicast routing
+        # should have a link local source address and a ttl of 1
+        # Multicast router advertisement
+        "-p icmpv6 --icmpv6-type 151 -s fe80::/10 -m hl --hl-eq 1 -j ACCEPT",
+        # Multicast router solicitation
+        "-p icmpv6 --icmpv6-type 152 -s fe80::/10 -m hl --hl-eq 1 -j ACCEPT",
+        # Multicast router termination
+        "-p icmpv6 --icmpv6-type 153 -s fe80::/10 -m hl --hl-eq 1 -j ACCEPT",
 
         # Drop packets with INVALID state
         "-m conntrack --ctstate INVALID -j DROP",
@@ -738,6 +777,10 @@ my $icmpv6_type_names = {
     'neighbour-solicitation' => 1,
     'neighbour-advertisement' => 1,
     'redirect' => 1,
+    130 => 1, # Listener Query
+    131 => 1, # Listener Report
+    132 => 1, # Listener Done
+    143 => 1, # Listener report v2
 };
 
 sub init_firewall_macros {
