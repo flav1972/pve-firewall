@@ -599,7 +599,7 @@ $pve_std_chains->{6} = {
 	# ipv6 addrtype does not work with kernel 2.6.32
 	#{ action => 'DROP', dsttype => 'MULTICAST' },
         #{ action => 'DROP', dsttype => 'ANYCAST' },
-        # Flav: This should not be dropped like this because it will drop all ICMP request for local discovery
+	# Flav: This should not be dropped like this because it will drop all ICMP request for local discovery
         #{ action => 'DROP', dest => 'ff00::/8' },
         #{ action => 'DROP', dest => '224.0.0.0/4' },
     ],
@@ -620,7 +620,7 @@ $pve_std_chains->{6} = {
 	{ action => 'PVEFW-reject', proto => 'tcp', dport => '43' }, # REJECT 'auth'
         # we are not interested in BROADCAST/MULTICAST/ANYCAST
         { action => 'PVEFW-DropBroadcast' },
-        # Flav: adds in order to make IPv6 working
+	# Flav: adds in order to make IPv6 working
         # For IPv6 some ICMP traffic are mandatory
         # ACCEPT critical ICMP types
         { action => 'ACCEPT', proto => 'icmpv6', dport => 'destination-unreachable' }, # 1
@@ -629,22 +629,22 @@ $pve_std_chains->{6} = {
         { action => 'ACCEPT', proto => 'icmpv6', dport => 'parameter-problem' }, # 4
 
         # These next are needed in order to configure neighbourghood and routing
-        # Allow others ICMPv6 types but only if the hop limit field is 255.
-        "-p icmpv6 --icmpv6-type router-solicitation -m hl --hl-eq 255 -j ACCEPT", # 133
-        "-p icmpv6 --icmpv6-type router-advertisement -m hl --hl-eq 255 -j ACCEPT", # 134
-        "-p icmpv6 --icmpv6-type neighbor-solicitation -m hl --hl-eq 255 -j ACCEPT", # 135
-        "-p icmpv6 --icmpv6-type neighbor-advertisement -m hl --hl-eq 255 -j ACCEPT", # 136
-        "-p icmpv6 --icmpv6-type redirect -m hl --hl-eq 255 -j ACCEPT", # 137
+	# Allow others ICMPv6 types but only if the hop limit field is 255.
+	"-p icmpv6 --icmpv6-type router-solicitation -m hl --hl-eq 255 -j ACCEPT", # 133
+	"-p icmpv6 --icmpv6-type router-advertisement -m hl --hl-eq 255 -j ACCEPT", # 134
+	"-p icmpv6 --icmpv6-type neighbor-solicitation -m hl --hl-eq 255 -j ACCEPT", # 135
+	"-p icmpv6 --icmpv6-type neighbor-advertisement -m hl --hl-eq 255 -j ACCEPT", # 136
+	"-p icmpv6 --icmpv6-type redirect -m hl --hl-eq 255 -j ACCEPT", # 137
         # inverse neighbour discovery solicitation
-        "-p icmpv6 --icmpv6-type 141 -m hl --hl-eq 255 -j ACCEPT",
+	"-p icmpv6 --icmpv6-type 141 -m hl --hl-eq 255 -j ACCEPT",
         # inverse neighbour discovery advertisement
-        "-p icmpv6 --icmpv6-type 142 -m hl --hl-eq 255 -j ACCEPT",
+	"-p icmpv6 --icmpv6-type 142 -m hl --hl-eq 255 -j ACCEPT",
 
         # For certificate usage
         # Certificate path solicitation
-        "-p icmpv6 --icmpv6-type 148 -m hl --hl-eq 255 -j ACCEPT",
+	"-p icmpv6 --icmpv6-type 148 -m hl --hl-eq 255 -j ACCEPT",
         # Certificate path advertisement
-        "-p icmpv6 --icmpv6-type 149 -m hl --hl-eq 255 -j ACCEPT",
+	"-p icmpv6 --icmpv6-type 149 -m hl --hl-eq 255 -j ACCEPT",
         
         # Multicast on Local Link
         # Listener Query / Report / Done
@@ -657,11 +657,11 @@ $pve_std_chains->{6} = {
         # Multicast routing
         # should have a link local source address and a ttl of 1
         # Multicast router advertisement
-        "-p icmpv6 --icmpv6-type 151 -s fe80::/10 -m hl --hl-eq 1 -j ACCEPT",
+	"-p icmpv6 --icmpv6-type 151 -s fe80::/10 -m hl --hl-eq 1 -j ACCEPT",
         # Multicast router solicitation
-        "-p icmpv6 --icmpv6-type 152 -s fe80::/10 -m hl --hl-eq 1 -j ACCEPT",
+	"-p icmpv6 --icmpv6-type 152 -s fe80::/10 -m hl --hl-eq 1 -j ACCEPT",
         # Multicast router termination
-        "-p icmpv6 --icmpv6-type 153 -s fe80::/10 -m hl --hl-eq 1 -j ACCEPT",
+	"-p icmpv6 --icmpv6-type 153 -s fe80::/10 -m hl --hl-eq 1 -j ACCEPT",
 
         # Drop packets with INVALID state
         "-m conntrack --ctstate INVALID -j DROP",
@@ -2232,7 +2232,7 @@ sub enable_host_firewall {
 
     # allow standard traffic on cluster network
     if ($localnet && ($ipversion == $localnet_ver)) {
-	# Flav: TODO verify this 4 rules
+        # Flav: TODO verify this 4 rules
 	ruleset_addrule($ruleset, $chain, "-d $localnet -p tcp --dport 8006 -j $accept_action");  # PVE API
 	ruleset_addrule($ruleset, $chain, "-d $localnet -p tcp --dport 22 -j $accept_action");  # SSH
 	ruleset_addrule($ruleset, $chain, "-d $localnet -p tcp --dport 5900:5999 -j $accept_action");  # PVE VNC Console
