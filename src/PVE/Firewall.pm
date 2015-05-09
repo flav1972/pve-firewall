@@ -960,6 +960,11 @@ sub compute_ipfilter_ipset_name {
 sub parse_address_list {
     my ($str) = @_;
 
+    # if it is a not
+    if ($str =~ m/^!\s*(.*)/) {
+	$str = $1;
+    }
+
     if ($str =~ m/^(\+)(\S+)$/) { # ipset ref
 	die "ipset name too long\n" if length($str) > ($max_ipset_name_length + 1);
 	return;
@@ -1634,16 +1639,20 @@ sub ruleset_generate_cmdstr {
     my $source = $rule->{source};
     my $dest = $rule->{dest};
 
+    my $negate = "";
     if ($source) {
+        if ($source =~ s/^!\s*//) {
+            $negate = "! ";
+        }
         if ($source =~ m/^\+/) {
 	    if ($source =~ m/^\+(${ipset_name_pattern})$/) {
 		my $name = $1;
 		if ($fw_conf && $fw_conf->{ipset}->{$name}) {
 		    my $ipset_chain = compute_ipset_chain_name($fw_conf->{vmid}, $name, $ipversion);
-		    push @cmd, "-m set --match-set ${ipset_chain} src";
+		    push @cmd, "-m set ${negate}--match-set ${ipset_chain} src";
 		} elsif ($cluster_conf && $cluster_conf->{ipset}->{$name}) {
 		    my $ipset_chain = compute_ipset_chain_name(0, $name, $ipversion);
-		    push @cmd, "-m set --match-set ${ipset_chain} src";
+		    push @cmd, "-m set ${negate}--match-set ${ipset_chain} src";
 		} else {
 		    die "no such ipset '$name'\n";
 		}
@@ -1657,22 +1666,26 @@ sub ruleset_generate_cmdstr {
 	    die "no such alias '$source'\n" if !$e;
 	    push @cmd, "-s $e->{cidr}";
         } elsif ($source =~ m/\-/){
-	    push @cmd, "-m iprange --src-range $source";
+	    push @cmd, "-m iprange ${negate}--src-range $source";
 	} else {
-	    push @cmd, "-s $source";
+	    push @cmd, "${negate}-s $source";
         }
     }
 
+    $negate = "";
     if ($dest) {
+        if ($dest =~ s/^!\s*//) {
+            $negate = "! ";
+        }
         if ($dest =~ m/^\+/) {
 	    if ($dest =~ m/^\+(${ipset_name_pattern})$/) {
 		my $name = $1;
 		if ($fw_conf && $fw_conf->{ipset}->{$name}) {
 		    my $ipset_chain = compute_ipset_chain_name($fw_conf->{vmid}, $name, $ipversion);
-		    push @cmd, "-m set --match-set ${ipset_chain} dst";
+		    push @cmd, "-m set ${negate}--match-set ${ipset_chain} dst";
 		} elsif ($cluster_conf && $cluster_conf->{ipset}->{$name}) {
 		    my $ipset_chain = compute_ipset_chain_name(0, $name, $ipversion);
-		    push @cmd, "-m set --match-set ${ipset_chain} dst";
+		    push @cmd, "-m set ${negate}--match-set ${ipset_chain} dst";
 		} else {
 		    die "no such ipset '$name'\n";
 		}
@@ -1686,9 +1699,9 @@ sub ruleset_generate_cmdstr {
 	    die "no such alias '$dest'\n" if !$e;
 	    push @cmd, "-d $e->{cidr}";
         } elsif ($dest =~ m/^(\d+)\.(\d+).(\d+).(\d+)\-(\d+)\.(\d+).(\d+).(\d+)$/){
-	    push @cmd, "-m iprange --dst-range $dest";
+	    push @cmd, "-m iprange ${negate}--dst-range $dest";
 	} else {
-	    push @cmd, "-d $dest";
+	    push @cmd, "${negate}-d $dest";
         }
     }
 
@@ -2400,11 +2413,11 @@ sub parse_fw_rule {
 	    $rule->{sport} = $1;
 	    next;
 	}
-	if ($line =~ s/^-source (\S+)\s*//) {
+	if ($line =~ s/^-source\s+((!\s*)?\S+)\s*//) {
 	    $rule->{source} = $1;
 	    next;
 	}
-	if ($line =~ s/^-dest (\S+)\s*//) {
+	if ($line =~ s/^-dest\s+((!\s*)?\S+)\s*//) {
 	    $rule->{dest} = $1;
 	    next;
 	}
