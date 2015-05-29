@@ -260,6 +260,11 @@ sub ruleset_simulate_chain {
 	return (undef, $counter);
     }
 
+     if ($chain eq 'PVEFW-HOST-FORWARD') {
+       add_trace("LEAVE chain $chain\n");
+       return (undef, $counter);
+    }
+
     my $rules = $ruleset->{$chain} ||
 	die "no such chain '$chain'";
 
